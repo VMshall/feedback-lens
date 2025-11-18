@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Feedback Lens — AI Customer Feedback Analyzer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config = { darkMode: 'class' }</script>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen font-sans">
+  <div class="max-w-5xl mx-auto px-4 py-10">
+    <div class="mb-10 text-center">
+      <h1 class="text-4xl font-bold text-white mb-2">Feedback Lens</h1>
+      <p class="text-gray-400 text-lg">AI-powered customer feedback analyzer — cluster themes, extract sentiment, surface insights</p>
+    </div>
+
+    <div class="bg-gray-900 rounded-2xl p-6 mb-6 border border-gray-800">
+      <label class="block text-sm font-medium text-gray-300 mb-2">Paste Feedback (one per line, 10–50 snippets recommended)</label>
+      <textarea id="feedbackInput" rows="12" placeholder="The app crashes every time I try to upload a photo&#10;Love the new dashboard, so much cleaner!&#10;Pricing is too high compared to competitors&#10;Customer support responded in 5 minutes, amazing&#10;The mobile app is slow on older phones" class="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none text-sm font-mono"></textarea>
+      <div class="flex items-center justify-between mt-4">
+        <span id="countLabel" class="text-gray-500 text-sm">0 snippets</span>
+        <button id="analyzeBtn" onclick="analyze()" class="bg-blue-600 hover:bg-blue-500 text-white font-semibold px-8 py-2.5 rounded-xl transition-colors">
+          Analyze Feedback
+        </button>
+      </div>
+    </div>
+
+    <div id="loading" class="hidden text-center py-12">
+      <div class="inline-block animate-spin rounded-full h-10 w-10 border-b-2 border-blue-500 mb-4"></div>
+      <p class="text-gray-400">Claude is analyzing your feedback...</p>
+    </div>
+
+    <div id="error" class="hidden bg-red-900/30 border border-red-700 rounded-xl p-4 mb-6">
+      <p class="text-red-400 text-sm" id="errorMsg"></p>
+    </div>
+
+    <div id="results" class="hidden space-y-6">
+      <!-- Overall Score -->
+      <div class="bg-gray-900 rounded-2xl p-6 border border-gray-800 flex items-center gap-6">
+        <div class="text-center">
+          <div id="overallScore" class="text-5xl font-bold"></div>
+          <div class="text-gray-400 text-xs mt-1">Overall Sentiment</div>
+        </div>
+        <div class="flex-1">
+          <div class="h-3 bg-gray-800 rounded-full overflow-hidden">
+            <div id="overallBar" class="h-full rounded-full transition-all duration-700"></div>
+          </div>
+          <div class="flex justify-between text-xs text-gray-500 mt-1">
+            <span>Very Negative</span><span>Neutral</span><span>Very Positive</span>
+          </div>
+        </div>
+        <div id="totalCount" class="text-gray-400 text-sm text-right"></div>
+      </div>
+
+      <!-- Clusters -->
+      <div>
+        <h2 class="text-xl font-semibold text-white mb-3">Feedback Clusters</h2>
+        <div id="clusters" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+      </div>
+
+      <!-- Top Complaints & Praise -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="bg-gray-900 rounded-2xl p-5 border border-gray-800">
+          <h3 class="text-red-400 font-semibold mb-3 flex items-center gap-2">⚠ Top Complaints</h3>
+          <ul id="complaints" class="space-y-2"></ul>
+        </div>
+        <div class="bg-gray-900 rounded-2xl p-5 border border-gray-800">
+          <h3 class="text-green-400 font-semibold mb-3 flex items-center gap-2">✓ Top Praise</h3>
+          <ul id="praise" class="space-y-2"></ul>
+        </div>
+      </div>
+
+      <!-- Action Items -->
+      <div class="bg-gray-900 rounded-2xl p-5 border border-gray-800">
+        <h2 class="text-xl font-semibold text-white mb-4">Prioritized Action Items</h2>
+        <div id="actions" class="space-y-3"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const textarea = document.getElementById('feedbackInput');
+    textarea.addEventListener('input', () => {
+      const lines = textarea.value.split('\n').filter(l => l.trim());
+      document.getElementById('countLabel').textContent = `${lines.length} snippet${lines.length !== 1 ? 's' : ''}`;
+    });
+
+    async function analyze() {
+      const text = textarea.value.trim();
+      const feedbacks = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+      if (feedbacks.length < 1) { showError('Please enter at least 1 feedback snippet.'); return; }
+
+      document.getElementById('error').classList.add('hidden');
+      document.getElementById('results').classList.add('hidden');
+      document.getElementById('loading').classList.remove('hidden');
+      document.getElementById('analyzeBtn').disabled = true;
+
+      try {
+        const res = await fetch('http://localhost:8000/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ feedbacks })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Analysis failed');
+        renderResults(data);
+      } catch (e) {
+        showError(e.message);
+      } finally {
+        document.getElementById('loading').classList.add('hidden');
+        document.getElementById('analyzeBtn').disabled = false;
+      }
+    }
+
+    function scoreToColor(score) {
+      if (score >= 0.3) return 'text-green-400';
+      if (score <= -0.3) return 'text-red-400';
+      return 'text-yellow-400';
+    }
+
+    function scoreToBarColor(score) {
+      if (score >= 0.3) return 'bg-green-500';
+      if (score <= -0.3) return 'bg-red-500';
+      return 'bg-yellow-500';
+    }
+
+    function sentimentBadge(label) {
+      const map = { positive: 'bg-green-900/50 text-green-400', negative: 'bg-red-900/50 text-red-400', neutral: 'bg-gray-700 text-gray-300', mixed: 'bg-yellow-900/50 text-yellow-400' };
+      return map[label] || map.neutral;
+    }
+
+    function renderResults(data) {
+      // Overall score
+      const score = data.overall_sentiment_score || 0;
+      const pct = ((score + 1) / 2 * 100).toFixed(0);
+      document.getElementById('overallScore').textContent = score.toFixed(2);
+      document.getElementById('overallScore').className = `text-5xl font-bold ${scoreToColor(score)}`;
+      const bar = document.getElementById('overallBar');
+      bar.style.width = pct + '%';
+      bar.className = `h-full rounded-full transition-all duration-700 ${scoreToBarColor(score)}`;
+      document.getElementById('totalCount').textContent = `${data.total_analyzed} feedbacks analyzed`;
+
+      // Clusters
+      const clustersEl = document.getElementById('clusters');
+      clustersEl.innerHTML = (data.clusters || []).map(c => {
+        const cpct = ((c.sentiment_score + 1) / 2 * 100).toFixed(0);
+        return `<div class="bg-gray-800 rounded-xl p-4 border border-gray-700">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="font-semibold text-white text-sm">${c.theme}</h3>
+            <span class="text-xs px-2 py-0.5 rounded-full ${sentimentBadge(c.sentiment_label)}">${c.sentiment_label}</span>
+          </div>
+          <p class="text-gray-400 text-xs mb-3">${c.summary}</p>
+          <div class="h-2 bg-gray-700 rounded-full mb-2">
+            <div class="h-full rounded-full ${scoreToBarColor(c.sentiment_score)}" style="width:${cpct}%"></div>
+          </div>
+          <div class="flex justify-between text-xs text-gray-500 mb-3">
+            <span>Score: ${c.sentiment_score.toFixed(2)}</span><span>${c.count} item${c.count !== 1 ? 's' : ''}</span>
+          </div>
+          ${c.examples.slice(0,2).map(ex => `<p class="text-xs text-gray-400 italic border-l-2 border-gray-600 pl-2 mb-1">"${ex}"</p>`).join('')}
+        </div>`;
+      }).join('');
+
+      // Complaints
+      document.getElementById('complaints').innerHTML = (data.top_complaints || []).map(c =>
+        `<li class="text-sm text-gray-300 flex items-start gap-2"><span class="text-red-500 mt-0.5">•</span>${c}</li>`).join('');
+
+      // Praise
+      document.getElementById('praise').innerHTML = (data.top_praise || []).map(p =>
+        `<li class="text-sm text-gray-300 flex items-start gap-2"><span class="text-green-500 mt-0.5">•</span>${p}</li>`).join('');
+
+      // Actions
+      const priorityColor = { high: 'bg-red-900/40 text-red-400 border-red-800', medium: 'bg-yellow-900/40 text-yellow-400 border-yellow-800', low: 'bg-gray-800 text-gray-400 border-gray-700' };
+      document.getElementById('actions').innerHTML = (data.action_items || []).map(a =>
+        `<div class="flex items-start gap-3 p-3 rounded-xl border ${priorityColor[a.priority] || priorityColor.low}">
+          <span class="text-xs font-bold uppercase px-2 py-0.5 rounded ${a.priority === 'high' ? 'bg-red-700/50' : a.priority === 'medium' ? 'bg-yellow-700/50' : 'bg-gray-700'}">${a.priority}</span>
+          <div><p class="text-sm font-medium text-white">${a.action}</p><p class="text-xs text-gray-400 mt-0.5">${a.rationale}</p></div>
+        </div>`).join('');
+
+      document.getElementById('results').classList.remove('hidden');
+    }
+
+    function showError(msg) {
+      document.getElementById('errorMsg').textContent = msg;
+      document.getElementById('error').classList.remove('hidden');
+    }
+  </script>
+</body>
+</html>
